@@ -33,6 +33,7 @@ import android.os.SystemProperties;
 import android.provider.Settings;
 import android.telecom.TelecomManager;
 import android.telephony.CarrierConfigManager;
+import android.telephony.CarrierConfigManagerEx;
 import android.telephony.ims.ImsMmTelManager;
 import android.telephony.ims.ImsService;
 import android.telephony.ims.ProvisioningManager;
@@ -459,6 +460,28 @@ public class ImsManager {
         return context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_TELEPHONY_IMS);
     }
 
+    /* UNISOC: bug1126104 @{ */
+    /**
+     * Initialize the user configuration of Enhanced 4G LTE Mode setting.
+     */
+    public void initializeEnhanced4gLteModeSetting() {
+        int setting = SubscriptionManager.getIntegerSubscriptionProperty(
+                getSubId(), SubscriptionManager.ENHANCED_4G_MODE_ENABLED,
+                SUB_PROPERTY_NOT_INITIALIZED, mContext);
+
+        log("initializeEnhanced4gLteModeSetting: phoneId = " + mPhoneId + " setting = " + setting);
+        // If Enhanced 4G LTE Mode is not initialized, we use the default value to initialze it
+        if (setting == SUB_PROPERTY_NOT_INITIALIZED) {
+            boolean onByDefault = getBooleanCarrierConfig(
+                    CarrierConfigManager.KEY_ENHANCED_4G_LTE_ON_BY_DEFAULT_BOOL);
+
+            log("initializeEnhanced4gLteModeSetting: phoneId = " + mPhoneId + " initialized by onByDefault: " + onByDefault);
+            SubscriptionManager.setSubscriptionProperty(getSubId(),
+                    SubscriptionManager.ENHANCED_4G_MODE_ENABLED, booleanToPropertyString(onByDefault));
+        }
+    }
+    /* @}*/
+
     /**
      * Returns the user configuration of Enhanced 4G LTE Mode setting.
      *
@@ -467,7 +490,10 @@ public class ImsManager {
      */
     public static boolean isEnhanced4gLteModeSettingEnabledByUser(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.isEnhanced4gLteModeSettingEnabledByUser();
         }
@@ -491,7 +517,7 @@ public class ImsManager {
                 SUB_PROPERTY_NOT_INITIALIZED, mContext);
         boolean onByDefault = getBooleanCarrierConfig(
                 CarrierConfigManager.KEY_ENHANCED_4G_LTE_ON_BY_DEFAULT_BOOL);
-
+        log("isEnhanced4gLte... : phoneId = " + mPhoneId + " setting = " + setting + ", onByDefault = " + onByDefault); // UNISOC: Modify for bug1126104
         // If Enhanced 4G LTE Mode is uneditable, hidden or not initialized, we use the default
         // value
         if (!getBooleanCarrierConfig(CarrierConfigManager.KEY_EDITABLE_ENHANCED_4G_LTE_BOOL)
@@ -511,7 +537,10 @@ public class ImsManager {
      */
     public static void setEnhanced4gLteModeSetting(Context context, boolean enabled) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             mgr.setEnhanced4gLteModeSetting(enabled);
         }
@@ -541,7 +570,7 @@ public class ImsManager {
         int prevSetting = SubscriptionManager.getIntegerSubscriptionProperty(subId,
                 SubscriptionManager.ENHANCED_4G_MODE_ENABLED, SUB_PROPERTY_NOT_INITIALIZED,
                 mContext);
-
+        log("setEnhanced4gLte... : phoneId = " + mPhoneId + " enabled = " + enabled + ", prevSetting = " + prevSetting); // UNISOC: Modify for bug1126104
         if (prevSetting != (enabled ?
                 ProvisioningManager.PROVISIONING_VALUE_ENABLED :
                 ProvisioningManager.PROVISIONING_VALUE_DISABLED)) {
@@ -571,7 +600,10 @@ public class ImsManager {
      */
     public static boolean isNonTtyOrTtyOnVolteEnabled(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.isNonTtyOrTtyOnVolteEnabled();
         }
@@ -607,7 +639,10 @@ public class ImsManager {
      */
     public static boolean isVolteEnabledByPlatform(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.isVolteEnabledByPlatform();
         }
@@ -630,10 +665,35 @@ public class ImsManager {
             return true;
         }
 
+        /* UNISOC:add for bug1168347
+         * check if sim plmn in VoLTE white list
+         */
+        if (allowedToRegisterVoLTE(mPhoneId) && SystemProperties.getBoolean("persist.vendor.sys.volte.enable",false)) {
+            log("isVolteEnabledByPlatform... sim plmn in volte whilte list: phoneId = " + mPhoneId);
+            return true;
+        }
+        /*@}*/
+
         return mContext.getResources().getBoolean(
                 com.android.internal.R.bool.config_device_volte_available)
                 && getBooleanCarrierConfig(CarrierConfigManager.KEY_CARRIER_VOLTE_AVAILABLE_BOOL)
-                && isGbaValid();
+                && isGbaValid() && SystemProperties.getBoolean("persist.vendor.sys.volte.enable",false);//UNISOC: modify by bug712261;
+    }
+
+    /**
+     * UNISOC: Add for bug1168347
+     * Returns if current sim is in volte white list or not.
+     */
+    private boolean allowedToRegisterVoLTE(int phoneId) {
+        if(!SubscriptionManager.isValidPhoneId(phoneId)){
+            return false;
+        }
+        String allowedPlmnProp = TelephonyManager.getTelephonyProperty(phoneId, "gsm.sys.sim.volte.allowedplmn", "0");
+        if("1".equals(allowedPlmnProp)) {
+           return true;
+        }
+        log("allowedToRegisterVoLTE... not allowed");
+        return false;
     }
 
     /**
@@ -644,7 +704,10 @@ public class ImsManager {
      */
     public static boolean isVolteProvisionedOnDevice(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.isVolteProvisionedOnDevice();
         }
@@ -675,7 +738,10 @@ public class ImsManager {
      */
     public static boolean isWfcProvisionedOnDevice(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.isWfcProvisionedOnDevice();
         }
@@ -713,7 +779,10 @@ public class ImsManager {
      */
     public static boolean isVtProvisionedOnDevice(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.isVtProvisionedOnDevice();
         }
@@ -744,7 +813,10 @@ public class ImsManager {
      */
     public static boolean isVtEnabledByPlatform(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.isVtEnabledByPlatform();
         }
@@ -771,7 +843,7 @@ public class ImsManager {
         return mContext.getResources().getBoolean(
                 com.android.internal.R.bool.config_device_vt_available) &&
                 getBooleanCarrierConfig(CarrierConfigManager.KEY_CARRIER_VT_AVAILABLE_BOOL) &&
-                isGbaValid();
+                isGbaValid() && SystemProperties.getBoolean("persist.sys.support.vt",false);//UNISOC: modify for vt switch
     }
 
     /**
@@ -781,7 +853,10 @@ public class ImsManager {
      */
     public static boolean isVtEnabledByUser(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.isVtEnabledByUser();
         }
@@ -798,9 +873,16 @@ public class ImsManager {
                 getSubId(), SubscriptionManager.VT_IMS_ENABLED,
                 SUB_PROPERTY_NOT_INITIALIZED, mContext);
 
+        //UNISOC: change for BUG 1051956
+        boolean onByDefault = getBooleanCarrierConfig(CarrierConfigManagerEx.KEY_CARRIER_VIDEO_CALLING_SETTING_ENABLED_BOOL);
+        log("isVtEnabledByUser...  setting = " + setting + " | onByDefault = " + onByDefault);
+
         // If it's never set, by default we return true.
-        return (setting == SUB_PROPERTY_NOT_INITIALIZED
-                || setting == ProvisioningManager.PROVISIONING_VALUE_ENABLED);
+        if (setting == SUB_PROPERTY_NOT_INITIALIZED) {
+            return onByDefault;
+        } else {
+            return (setting == ProvisioningManager.PROVISIONING_VALUE_ENABLED);
+        }
     }
 
     /**
@@ -810,7 +892,10 @@ public class ImsManager {
      */
     public static void setVtSetting(Context context, boolean enabled) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             mgr.setVtSetting(enabled);
         }
@@ -835,6 +920,7 @@ public class ImsManager {
                     + subId);
         }
 
+        log("setVtSetting: phoneId = " + mPhoneId + " enabled = " + enabled); // UNISOC: Modify for bug1126104
         try {
             changeMmTelCapability(MmTelFeature.MmTelCapabilities.CAPABILITY_TYPE_VIDEO,
                     ImsRegistrationImplBase.REGISTRATION_TECH_LTE, enabled);
@@ -865,7 +951,10 @@ public class ImsManager {
      */
     private static boolean isTurnOffImsAllowedByPlatform(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.isTurnOffImsAllowedByPlatform();
         }
@@ -899,7 +988,10 @@ public class ImsManager {
      */
     public static boolean isWfcEnabledByUser(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.isWfcEnabledByUser();
         }
@@ -916,6 +1008,7 @@ public class ImsManager {
                 getSubId(), SubscriptionManager.WFC_IMS_ENABLED,
                 SUB_PROPERTY_NOT_INITIALIZED, mContext);
 
+        log("isWfcEnabledByUser: phoneId = " + mPhoneId + " setting = " + setting); // UNISOC: Modify for bug1126104
         // SUB_PROPERTY_NOT_INITIALIZED indicates it's never set in sub db.
         if (setting == SUB_PROPERTY_NOT_INITIALIZED) {
             return getBooleanCarrierConfig(
@@ -932,7 +1025,10 @@ public class ImsManager {
      */
     public static void setWfcSetting(Context context, boolean enabled) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             mgr.setWfcSetting(enabled);
         }
@@ -943,6 +1039,7 @@ public class ImsManager {
      * Change persistent WFC enabled setting for slot.
      */
     public void setWfcSetting(boolean enabled) {
+        log("setWfcSetting: phoneId = " + mPhoneId + " enabled = " + enabled); // UNISOC: Modify for bug1126104
         if (enabled && !isWfcProvisionedOnDevice()) {
             log("setWfcSetting: Not possible to enable WFC due to provisioning.");
             return;
@@ -1007,7 +1104,10 @@ public class ImsManager {
      */
     public static int getWfcMode(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.getWfcMode();
         }
@@ -1030,7 +1130,10 @@ public class ImsManager {
      */
     public static void setWfcMode(Context context, int wfcMode) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             mgr.setWfcMode(wfcMode);
         }
@@ -1054,7 +1157,10 @@ public class ImsManager {
      */
     public static int getWfcMode(Context context, boolean roaming) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.getWfcMode(roaming);
         }
@@ -1126,7 +1232,10 @@ public class ImsManager {
      */
     public static void setWfcMode(Context context, int wfcMode, boolean roaming) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             mgr.setWfcMode(wfcMode, roaming);
         }
@@ -1194,7 +1303,10 @@ public class ImsManager {
      */
     public static boolean isWfcRoamingEnabledByUser(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.isWfcRoamingEnabledByUser();
         }
@@ -1223,7 +1335,10 @@ public class ImsManager {
      */
     public static void setWfcRoamingSetting(Context context, boolean enabled) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             mgr.setWfcRoamingSetting(enabled);
         }
@@ -1265,7 +1380,10 @@ public class ImsManager {
      */
     public static boolean isWfcEnabledByPlatform(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             return mgr.isWfcEnabledByPlatform();
         }
@@ -1425,8 +1543,16 @@ public class ImsManager {
                 // changeEnabledCapabilities() function calls from setAdvanced4GMode(). This is done
                 // to differentiate this code path from vendor code perspective.
                 CapabilityChangeRequest request = new CapabilityChangeRequest();
+                // UNISOC 825887
+                int primaryCardPhoneId = SubscriptionManager.getPhoneId(
+                        SubscriptionManager.getDefaultDataSubscriptionId());
+                log("updateImsServiceConfig() : primaryCardPhoneId = " + primaryCardPhoneId + " | phoneId = "
+                        + mPhoneId);
+                if (mPhoneId == primaryCardPhoneId) {
+                    updateWfcFeatureAndProvisionedValues(request);
+                }
+
                 updateVolteFeatureValue(request);
-                updateWfcFeatureAndProvisionedValues(request);
                 updateVideoCallFeatureValue(request);
                 boolean isImsNeededForRtt = updateRttConfigValue();
                 // Supplementary services over UT do not require IMS registration. Do not alter IMS
@@ -1493,7 +1619,7 @@ public class ImsManager {
      */
     private void updateVideoCallFeatureValue(CapabilityChangeRequest request) {
         boolean available = isVtEnabledByPlatform();
-        boolean enabled = isVtEnabledByUser();
+        boolean enabled = isVtEnabledByUser() && isEnhanced4gLteModeSettingEnabledByUser();//UNISOC:add enhance 4G condition for bug713900
         boolean isNonTty = isNonTtyOrTtyOnVolteEnabled();
         boolean isDataEnabled = isDataEnabled();
         boolean ignoreDataEnabledChanged = getBooleanCarrierConfig(
@@ -2440,8 +2566,15 @@ public class ImsManager {
     }
 
     private boolean isImsTurnOffAllowed() {
+        log("isImsTurnOffAllowed : mPhoneId = " + mPhoneId);
+        if (mPhoneId != SubscriptionManager.getPhoneId(
+                SubscriptionManager.getDefaultDataSubscriptionId())) {
+            log("isImsTurnOffAllowed() is not data sim card = ");
+            return isTurnOffImsAllowedByPlatform();
+        }
         return isTurnOffImsAllowedByPlatform()
-                && (!isWfcEnabledByPlatform()
+                && (!getBooleanCarrierConfig(CarrierConfigManagerEx.KEY_SYNCHRONOUS_SETTING_FOR_WFC_VOLTE)
+                || !isWfcEnabledByPlatform()
                 || !isWfcEnabledByUser());
     }
 
@@ -2657,7 +2790,10 @@ public class ImsManager {
      */
     public static void factoryReset(Context context) {
         ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+                /*UNISOC:modify for IMS
+                @Orig: SubscriptionManager.getDefaultVoicePhoneId {*/
+                SubscriptionManager.getPhoneId(SubscriptionManager.getDefaultDataSubscriptionId()));
+                /*@}*/
         if (mgr != null) {
             mgr.factoryReset();
         }

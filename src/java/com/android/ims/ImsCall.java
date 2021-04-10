@@ -1122,6 +1122,11 @@ public class ImsCall implements ICall {
     public void start(ImsCallSession session, String[] participants)
             throws ImsException {
         logi("start(n) :: session=" + session);
+        /* UNISOC: add for VoLTE @{ */
+        if(participants != null && participants.length >1){
+            mIsConferenceHost = true;
+        }
+        /* @} */
 
         synchronized(mLockObj) {
             mSession = session;
@@ -1322,10 +1327,11 @@ public class ImsCall implements ICall {
                         ImsReasonInfo.CODE_LOCAL_CALL_TERMINATED);
             }
 
-            mSession.hold(createHoldMediaProfile());
             // FIXME: We should update the state on the callback because that is where
             // we can confirm that the hold request was successful or not.
+            // UNISOC: set mHold as true before hold.
             mHold = true;
+            mSession.hold(createHoldMediaProfile());
             mUpdateRequest = UPDATE_HOLD;
         }
     }
@@ -1414,7 +1420,8 @@ public class ImsCall implements ICall {
 
             // if skipHoldBeforeMerge = true, IMS service implementation will
             // merge without explicitly holding the call.
-            if (mHold || (mContext.getResources().getBoolean(
+            // UNISOC: Add isVoWifiCall for Bug659351
+            if (mHold || !isWifiCall() || (mContext.getResources().getBoolean(
                     com.android.internal.R.bool.skipHoldBeforeMerge))) {
 
                 if (mMergePeer != null && !mMergePeer.isMultiparty() && !isMultiparty()) {
@@ -2446,6 +2453,10 @@ public class ImsCall implements ICall {
                     return;
                 }
 
+                //UNISOC: add for bug993114
+                if (!mHold) {
+                    mHold = true;
+                }
                 mUpdateRequest = UPDATE_NONE;
                 listener = mListener;
             }
@@ -2483,6 +2494,11 @@ public class ImsCall implements ICall {
             synchronized(ImsCall.this) {
                 if (mUpdateRequest == UPDATE_HOLD_MERGE) {
                     isHoldForMerge = true;
+                    setCallSessionMergePending(false);//UNISOC:add for bug832654
+                    //UNISOC: Fix merge state still exist after vowifi call hold fail.
+                    if (mMergePeer != null) {
+                        mMergePeer.setCallSessionMergePending(false);
+                    }
                 }
 
                 mUpdateRequest = UPDATE_NONE;
